@@ -1,0 +1,155 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// 1. CONTROLE DE ACESSO (RBAC)
+enum Role {
+  OWNER      // Proprietário (Acesso total)
+  MANAGER    // Gerente
+  CASHIER    // Operador de Caixa
+  ATTENDANT  // Atendente
+}
+
+model User {
+  id        String   @id @default(uuid())
+  name      String
+  email     String   @unique
+  password  String
+  role      Role     @default(OWNER)
+  createdAt DateTime @default(now())
+  
+  transactions  Transaction[]
+  cashRegisters CashRegister[]
+}
+
+// 2. ENTIDADES (Clientes e Fornecedores)
+model Client {
+  id          String   @id @default(uuid())
+  name        String
+  document    String?  @unique // CPF ou CNPJ
+  phone       String?
+  email       String?
+  address     String?
+  notes       String?
+  creditLimit Decimal  @default(500.00)
+  createdAt   DateTime @default(now())
+
+  transactions Transaction[]
+  sales        Sale[]
+}
+
+model Supplier {
+  id        String   @id @default(uuid())
+  name      String
+  document  String?  @unique
+  phone     String?
+  email     String?
+  address   String?
+  createdAt DateTime @default(now())
+
+  products     Product[]
+  transactions Transaction[]
+}
+
+// 3. CENTRO DE CUSTOS E PRODUTOS
+model Category {
+  id        String   @id @default(uuid())
+  name      String
+  type      String   // 'income' ou 'outcome'
+  
+  transactions Transaction[]
+  products     Product[]
+}
+
+model Product {
+  id            String   @id @default(uuid())
+  name          String
+  internalCode  String?  @unique
+  barcode       String?  @unique
+  costPrice     Decimal
+  salePrice     Decimal
+  stockQuantity Int      @default(0)
+  minStock      Int      @default(5)
+  location      String?  // Ex: "Prateleira A"
+  
+  categoryId    String?
+  category      Category? @relation(fields: [categoryId], references: [id])
+  supplierId    String?
+  supplier      Supplier? @relation(fields: [supplierId], references: [id])
+  
+  saleItems     SaleItem[]
+}
+
+// 4. FRENTE DE CAIXA (PDV)
+model CashRegister {
+  id             String    @id @default(uuid())
+  openedAt       DateTime  @default(now())
+  closedAt       DateTime?
+  initialBalance Decimal   @default(0) // Troco inicial
+  finalBalance   Decimal?
+  status         String    @default("OPEN") // OPEN ou CLOSED
+  
+  userId         String
+  user           User      @relation(fields: [userId], references: [id])
+  
+  transactions   Transaction[]
+  sales          Sale[]
+}
+
+model Sale {
+  id             String   @id @default(uuid())
+  total          Decimal
+  paymentMethod  String   // PIX, CASH, CREDIT, DEBIT
+  createdAt      DateTime @default(now())
+  
+  cashRegisterId String
+  cashRegister   CashRegister @relation(fields: [cashRegisterId], references: [id])
+  clientId       String?
+  client         Client?      @relation(fields: [clientId], references: [id])
+  
+  items          SaleItem[]
+}
+
+model SaleItem {
+  id         String  @id @default(uuid())
+  quantity   Int
+  unitPrice  Decimal
+  totalPrice Decimal
+  
+  saleId     String
+  sale       Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  productId  String
+  product    Product @relation(fields: [productId], references: [id])
+}
+
+// 5. FINANCEIRO CORE (Atualizado com PF vs PJ)
+model Transaction {
+  id             String    @id @default(uuid())
+  title          String
+  amount         Decimal
+  type           String    // 'income' ou 'outcome'
+  status         String    @default("PAID")
+  dueDate        DateTime?
+  isPersonal     Boolean   @default(false) // Separação Patrimonial: True = Dinheiro do Proprietário, False = Empresa
+  createdAt      DateTime  @default(now())
+  
+  userId         String
+  user           User      @relation(fields: [userId], references: [id])
+  
+  categoryId     String?
+  category       Category? @relation(fields: [categoryId], references: [id])
+  
+  clientId       String?
+  client         Client?   @relation(fields: [clientId], references: [id])
+  
+  supplierId     String?
+  supplier       Supplier? @relation(fields: [supplierId], references: [id])
+  
+  cashRegisterId String?
+  cashRegister   CashRegister? @relation(fields: [cashRegisterId], references: [id])
+}
