@@ -148,6 +148,7 @@ const transactionSchema = z.object({
   status: z.enum(['PAID', 'PENDING']).optional().default('PAID'),
   dueDate: z.string().optional().nullable(),
   cashRegisterId: z.string().optional().nullable(),
+  paymentMethod: z.string().optional().nullable(),
   isPersonal: z.boolean().optional().default(false),
   clientId: z.string().optional().nullable(),
 });
@@ -183,35 +184,73 @@ app.post('/transactions', authMiddleware, async (req, res) => {
       }
     }
 
-    const transaction = await prisma.transaction.create({
-      data: {
-        title: data.title,
-        amount: data.amount,
-        type: data.type,
-        userId: req.userId as string,
-        categoryId: data.categoryId || null,
-        status: data.status,
-        dueDate: data.dueDate ? new Date(data.dueDate) : null,
-        cashRegisterId: data.cashRegisterId || null,
-        isPersonal: data.isPersonal,
-        clientId: data.clientId || null, // <-- Salva o ID (seja cliente ou fornecedor) aqui
-      },
+    const transaction = await prisma.$transaction(async (tx) => {
+      const newTransaction = await tx.transaction.create({
+        data: {
+          title: data.title,
+          amount: data.amount,
+          type: data.type,
+          userId: req.userId as string,
+          categoryId: data.categoryId || null,
+          status: data.status,
+          dueDate: data.dueDate ? new Date(data.dueDate) : null,
+          cashRegisterId: data.cashRegisterId || null,
+          paymentMethod: data.paymentMethod || null,
+          isPersonal: data.isPersonal,
+          clientId: data.clientId || null,
+        },
+      });
+
+      if (data.status === 'PAID' && data.paymentMethod === 'CASH' && data.cashRegisterId) {
+         if (data.type === 'income') {
+           await tx.cashRegister.update({
+             where: { id: data.cashRegisterId },
+             data: { currentBalance: { increment: data.amount } }
+           });
+         } else if (data.type === 'outcome') {
+           await tx.cashRegister.update({
+             where: { id: data.cashRegisterId },
+             data: { currentBalance: { decrement: data.amount } }
+           });
+         }
+      }
+      return newTransaction;
     });
+
     return res.status(201).json(transaction);
   } catch (error) {
+    console.error(error);
     return res.status(500).json({ error: 'Erro ao criar transação.' });
   }
 });
 
 app.patch('/transactions/:id/pay', authMiddleware, async (req, res) => {
+  const { paymentMethod, cashRegisterId } = req.body;
   try {
     const whereCondition = req.role === 'DEV' ? { id: req.params.id as string } : { id: req.params.id as string, userId: req.userId as string };
-    const transaction = await prisma.transaction.update({
-      where: whereCondition,
-      data: { status: 'PAID', createdAt: new Date() },
+    
+    const transaction = await prisma.$transaction(async (tx) => {
+      const existing = await tx.transaction.findUnique({ where: whereCondition });
+      if (!existing) throw new Error("Not found");
+
+      const updated = await tx.transaction.update({
+        where: whereCondition,
+        data: { status: 'PAID', paymentMethod: paymentMethod || existing.paymentMethod, cashRegisterId: cashRegisterId || existing.cashRegisterId, createdAt: new Date() },
+      });
+
+      if ((paymentMethod === 'CASH' || updated.paymentMethod === 'CASH') && updated.cashRegisterId) {
+         if (updated.type === 'income') {
+           await tx.cashRegister.update({ where: { id: updated.cashRegisterId }, data: { currentBalance: { increment: updated.amount } } });
+         } else if (updated.type === 'outcome') {
+           await tx.cashRegister.update({ where: { id: updated.cashRegisterId }, data: { currentBalance: { decrement: updated.amount } } });
+         }
+      }
+      return updated;
     });
+
     return res.status(200).json(transaction);
   } catch (error) {
+    console.error(error);
     return res.status(500).json({ error: 'Erro ao processar o pagamento.' });
   }
 });
@@ -410,10 +449,11 @@ app.post('/cash-registers', authMiddleware, async (req, res) => {
     if (existing) return res.status(400).json({ error: 'Já existe um caixa aberto.' });
 
     const cashRegister = await prisma.cashRegister.create({
-      data: { initialBalance: Number(req.body.initialBalance) || 0, userId: req.userId as string, status: 'OPEN' },
+      data: { initialBalance: Number(req.body.initialBalance) || 0, currentBalance: Number(req.body.initialBalance) || 0, userId: req.userId as string, status: 'OPEN' },
     });
     return res.status(201).json(cashRegister);
   } catch (error) {
+    console.error(error);
     return res.status(500).json({ error: 'Erro ao abrir o caixa.' });
   }
 });
@@ -426,15 +466,24 @@ app.post('/cash-registers/:id/sangria', authMiddleware, async (req, res) => {
     const cashRegister = await prisma.cashRegister.findUnique({ where: { id: req.params.id as string } });
     if (!cashRegister || cashRegister.status !== 'OPEN') return res.status(400).json({ error: 'Caixa fechado.' });
 
-    const transaction = await prisma.transaction.create({
-      data: {
-        title: `Sangria: ${reason || 'Retirada parcial'}`,
-        amount: Number(amount),
-        type: 'outcome',
-        userId: req.userId as string,
-        cashRegisterId: req.params.id as string,
-      },
+    const transaction = await prisma.$transaction(async (tx) => {
+      const t = await tx.transaction.create({
+        data: {
+          title: `Sangria: ${reason || 'Retirada parcial'}`,
+          amount: Number(amount),
+          type: 'outcome',
+          paymentMethod: 'CASH',
+          userId: req.userId as string,
+          cashRegisterId: req.params.id as string,
+        },
+      });
+      await tx.cashRegister.update({
+        where: { id: req.params.id as string },
+        data: { currentBalance: { decrement: Number(amount) } }
+      });
+      return t;
     });
+
     return res.status(201).json(transaction);
   } catch (error) {
     return res.status(500).json({ error: 'Erro ao processar sangria.' });
@@ -519,12 +568,21 @@ app.post('/sales', authMiddleware, async (req, res) => {
           title: `Venda PDV #${newSale.id.substring(0, 6).toUpperCase()}${paymentMethod === 'FIADO' ? ' (Fiado)' : ''}`,
           amount: total,
           type: 'income',
+          paymentMethod,
           status: paymentMethod === 'FIADO' ? 'PENDING' : 'PAID',
           userId: req.userId as string,
           cashRegisterId,
           clientId: clientId || null,
         },
       });
+
+      if (paymentMethod === 'CASH' && cashRegisterId) {
+         await tx.cashRegister.update({
+           where: { id: cashRegisterId },
+           data: { currentBalance: { increment: total } }
+         });
+      }
+
       return newSale;
     });
     return res.status(201).json(sale);
@@ -680,18 +738,28 @@ app.get('/fiados', authMiddleware, async (req, res) => {
 
 app.post('/clients/:id/pay-fiado', authMiddleware, async (req, res) => {
   const { id } = req.params;
+  const { paymentMethod, cashRegisterId } = req.body;
   try {
-    await prisma.transaction.updateMany({
-      where: {
-        clientId: id as string,
-        type: 'income',
-        status: 'PENDING',
-      },
-      data: {
-        status: 'PAID',
-        createdAt: new Date(),
+    await prisma.$transaction(async (tx) => {
+      const pendingTransactions = await tx.transaction.findMany({
+        where: { clientId: id as string, type: 'income', status: 'PENDING' }
+      });
+      
+      const totalPaid = pendingTransactions.reduce((acc, t) => acc + Number(t.amount), 0);
+
+      await tx.transaction.updateMany({
+        where: { clientId: id as string, type: 'income', status: 'PENDING' },
+        data: { status: 'PAID', paymentMethod: paymentMethod || 'CASH', cashRegisterId: cashRegisterId || null, createdAt: new Date() }
+      });
+
+      if (paymentMethod === 'CASH' && cashRegisterId) {
+        await tx.cashRegister.update({
+          where: { id: cashRegisterId },
+          data: { currentBalance: { increment: totalPaid } }
+        });
       }
     });
+
     return res.status(200).json({ message: 'Fiados baixados com sucesso!' });
   } catch (error) {
     console.error("Erro ao dar baixa nos fiados:", error);
@@ -740,11 +808,19 @@ app.post('/clients/:id/pay-fiado-partial', authMiddleware, async (req, res) => {
           amount: payAmount,
           type: 'income',
           status: 'PAID',
+          paymentMethod: req.body.paymentMethod || 'CASH',
           userId: req.userId as string,
           cashRegisterId: cashRegisterId || null,
           clientId: client.id,
         }
       });
+
+      if ((req.body.paymentMethod === 'CASH' || !req.body.paymentMethod) && cashRegisterId) {
+        await tx.cashRegister.update({
+          where: { id: cashRegisterId },
+          data: { currentBalance: { increment: payAmount } }
+        });
+      }
 
       // 2. Abate das contas do fiado
       let remaining = payAmount;

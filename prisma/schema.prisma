@@ -109,6 +109,7 @@ model CashRegister {
   openedAt       DateTime  @default(now())
   closedAt       DateTime?
   initialBalance Decimal   @default(0) // Troco inicial
+  currentBalance Decimal   @default(0) // Dinheiro físico na gaveta
   finalBalance   Decimal?
   status         String    @default("OPEN") // OPEN ou CLOSED
   
@@ -154,6 +155,7 @@ model Transaction {
   amount         Decimal
   type           String    // 'income' ou 'outcome'
   status         String    @default("PAID")
+  paymentMethod  String?   // PIX, CASH, CREDIT, DEBIT
   dueDate        DateTime?
   isPersonal     Boolean   @default(false) // Separação Patrimonial: True = Dinheiro do Proprietário, False = Empresa
   createdAt      DateTime  @default(now())
