@@ -8,6 +8,8 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { authMiddleware } from './middlewares/authMiddleware';
 import { z } from 'zod';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 
 const app = express();
 
@@ -23,8 +25,19 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
 
-app.use(cors());
+app.use(helmet());
+app.use(cors({
+  origin: process.env.FRONTEND_URL || '*'
+}));
 app.use(express.json());
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutos
+  max: 10, // Limite de 10 tentativas por IP
+  message: { error: 'Muitas tentativas de login. Tente novamente após 15 minutos.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // ==========================================
 // MÓDULO: USUÁRIOS E AUTENTICAÇÃO
@@ -43,15 +56,20 @@ app.post('/register', async (req, res) => {
   }
 });
 
-app.post('/login', async (req, res) => {
+app.post('/login', loginLimiter, async (req, res) => {
   const { email, password } = req.body;
 
-  if (email === 'dev@master.com' && password === 'dev123') {
+  if (
+    process.env.DEV_EMAIL && 
+    process.env.DEV_PASSWORD && 
+    email === process.env.DEV_EMAIL && 
+    password === process.env.DEV_PASSWORD
+  ) {
     const token = jwt.sign({ userId: 'DEV_MASTER', role: 'DEV' }, process.env.JWT_SECRET as string, { expiresIn: '1d' });
     return res.status(200).json({
       message: 'Login bem-sucedido!',
       token,
-      user: { id: 'DEV_MASTER', name: 'Desenvolvedor Master', email: 'dev@master.com', role: 'DEV' }
+      user: { id: 'DEV_MASTER', name: 'Desenvolvedor Master', email: process.env.DEV_EMAIL, role: 'DEV' }
     });
   }
 
