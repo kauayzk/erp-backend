@@ -25,6 +25,11 @@ model User {
   
   transactions  Transaction[]
   cashRegisters CashRegister[]
+  clients       Client[]
+  suppliers     Supplier[]
+  categories    Category[]
+  products      Product[]
+  sales         Sale[]
 }
 
 // 2. ENTIDADES (Clientes e Fornecedores)
@@ -39,6 +44,9 @@ model Client {
   creditLimit Decimal  @default(500.00)
   createdAt   DateTime @default(now())
 
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+
   transactions Transaction[]
   sales        Sale[]
 }
@@ -52,6 +60,9 @@ model Supplier {
   address   String?
   createdAt DateTime @default(now())
 
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+
   products     Product[]
   transactions Transaction[]
 }
@@ -61,6 +72,9 @@ model Category {
   id        String   @id @default(uuid())
   name      String
   type      String   // 'income' ou 'outcome'
+
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
   
   transactions Transaction[]
   products     Product[]
@@ -82,6 +96,9 @@ model Product {
   supplierId    String?
   supplier      Supplier? @relation(fields: [supplierId], references: [id])
   
+  userId        String
+  user          User      @relation(fields: [userId], references: [id])
+
   saleItems     SaleItem[]
 }
 
@@ -107,6 +124,8 @@ model Sale {
   paymentMethod  String   // PIX, CASH, CREDIT, DEBIT
   createdAt      DateTime @default(now())
   
+  userId         String
+  user           User         @relation(fields: [userId], references: [id])
   cashRegisterId String
   cashRegister   CashRegister @relation(fields: [cashRegisterId], references: [id])
   clientId       String?
