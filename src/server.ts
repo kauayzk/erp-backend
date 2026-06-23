@@ -114,8 +114,9 @@ app.post('/categories', authMiddleware, async (req, res) => {
   try {
     const category = await prisma.category.create({ data: { name, type, userId: req.userId as string } });
     return res.status(201).json(category);
-  } catch (error) {
-    return res.status(500).json({ error: 'Erro ao criar categoria.' });
+  } catch (error: any) {
+    console.error("Erro detalhado ao criar categoria:", error);
+    return res.status(500).json({ error: 'Erro ao criar categoria.', details: error.message || error });
   }
 });
 
@@ -665,8 +666,13 @@ app.get('/suppliers', authMiddleware, async (req, res) => {
 app.post('/suppliers', authMiddleware, async (req, res) => {
   const parsedData = personSchema.safeParse(req.body);
   if (!parsedData.success) return res.status(400).json({ error: parsedData.error.issues[0].message });
-  const supplier = await prisma.supplier.create({ data: { ...parsedData.data, userId: req.userId as string } });
-  return res.status(201).json(supplier);
+  try {
+    const supplier = await prisma.supplier.create({ data: { ...parsedData.data, userId: req.userId as string } });
+    return res.status(201).json(supplier);
+  } catch (error: any) {
+    console.error("Erro detalhado ao criar fornecedor:", error);
+    return res.status(500).json({ error: 'Erro ao criar fornecedor.', details: error.message || error });
+  }
 });
 
 app.put('/suppliers/:id', authMiddleware, async (req, res) => {
