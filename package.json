@@ -8,7 +8,7 @@
     "dev": "tsx watch src/server.ts",
     "postinstall": "prisma generate",
     "build": "tsc",
-    "start": "node src/server.js"
+    "start": "node dist/src/server.js"
   },
   "keywords": [],
   "author": "",
