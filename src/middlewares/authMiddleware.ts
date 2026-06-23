@@ -5,6 +5,7 @@ declare global {
   namespace Express {
     interface Request {
       userId?: string;
+      role?: string;
     }
   }
 }
@@ -19,8 +20,9 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction) 
   const [, token] = authHeader.split(' ');
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as { userId: string };
+    const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as { userId: string, role?: string };
     req.userId = decoded.userId;
+    req.role = decoded.role;
     return next();
   } catch (error) {
     return res.status(401).json({ error: 'Token inválido ou expirado.' });
